@@ -1,0 +1,47 @@
+
+# comments are allowed obviously
+# toml like format, we can define sections
+
+[Items]
+
+# items are all the objects that can go on conveyor belts
+# the general format is: "name"
+
+IronOre,
+CopperOre,
+Stone,
+Coal,
+IronPlate,
+CopperPlate,
+SteelPlate,
+IronGearWheel,
+CopperCable,
+ElectronicCircuit,
+AdvancedCircuit,
+ProcessingUnit,
+EngineUnit,
+ElectricEngineUnit,
+PlasticBar,
+Sulfur,
+Battery,
+Pipe,
+IronStick,
+FlyingRobotFrame,
+TransportBelt,
+Inserter,
+AutomationSciencePack,
+LogisticSciencePack,
+ChemicalSciencePack,
+ProductionSciencePack,
+UtilitySciencePack,
+
+[Liquids]
+
+# liquids go in pipes, not on conveyors
+# the general format is: "name"
+
+Water,
+CrudeOil,
+PetroleumGas,
+SulfuricAcid,
+Lubricant,
