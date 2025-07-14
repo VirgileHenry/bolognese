@@ -1,11 +1,17 @@
 #[derive(Debug)]
 pub struct Item {
-    id: usize,
     name: String,
+    kind: crate::factorio::ItemKind,
 }
 
 impl Item {
-    pub fn new(name: String) -> Self {
-        Item { id: 0, name }
+    pub fn new(name: String, kind: crate::factorio::ItemKind) -> Self {
+        Item { name, kind }
+    }
+}
+
+impl Item {
+    pub fn name(&self) -> &str {
+        &self.name
     }
 }

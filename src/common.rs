@@ -60,3 +60,34 @@ impl Rect {
             && pos.y < self.top_left.y + self.size.height.get()
     }
 }
+
+pub type Color = crossterm::style::Color;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Pixel {
+    value: char,
+    foreground: Color,
+    background: Color,
+}
+
+impl Pixel {
+    pub fn new(value: char, foreground: Color, background: Color) -> Pixel {
+        Pixel {
+            value,
+            foreground,
+            background,
+        }
+    }
+
+    pub fn value(&self) -> char {
+        self.value
+    }
+
+    pub fn foreground(&self) -> Color {
+        self.foreground
+    }
+
+    pub fn background(&self) -> Color {
+        self.background
+    }
+}

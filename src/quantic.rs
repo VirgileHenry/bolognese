@@ -1,22 +1,16 @@
 mod building;
 mod common;
-mod item;
-mod recipe;
-mod tile_offset;
+mod offset;
+mod tile;
 
 pub use building::*;
 pub use common::*;
-pub use item::*;
-pub use recipe::*;
-pub use tile_offset::*;
+pub use offset::*;
+pub use tile::*;
 
-pub trait Quantic: Sized {
+pub trait Quantic {
     type Collapsed;
-    fn all(pos: crate::common::Position, grid_size: crate::common::Size) -> Self;
     fn entropy(&self) -> f32;
-    fn constrain(&mut self, _: crate::constraint::Constraint<Self>) -> Result<(), Error> {
-        Ok(())
-    }
     fn collapse(&self) -> Result<Self::Collapsed, Error>;
 }
 

@@ -1,60 +1,106 @@
-use crate::common::{Position, Size};
+use crate::common;
+use crate::library;
+use crate::quantic;
+use quantic::Quantic;
 
-pub trait GridElement {
-    fn size(&self) -> Size;
-    fn display_char(&self) -> char;
+/// a collapsed tile within the grid.
+pub struct Tile<'lib> {
+    building: &'lib library::Building,
+    properties: Vec<library::BuildingPropertyValue>,
+    offset: common::Position,
 }
 
-#[derive(Debug)]
-pub enum GridError {
-    OutOfBound,
-    InsertionWouldOverlap,
-}
+impl<'lib> Tile<'lib> {
+    pub fn new(
+        building: &'lib library::Building,
+        properties: Vec<library::BuildingPropertyValue>,
+        offset: common::Position,
+    ) -> Self {
+        Tile {
+            building,
+            properties,
+            offset,
+        }
+    }
 
-impl core::fmt::Display for GridError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{self:?}")
+    pub fn building(&self) -> &library::Building {
+        self.building
+    }
+
+    pub fn offset(&self) -> crate::common::Position {
+        self.offset
     }
 }
 
-impl core::error::Error for GridError {}
+pub enum TileState<'lib> {
+    Collapsed(Tile<'lib>),
+    Supperposed(crate::quantic::Tile<'lib>),
+}
 
-impl core::fmt::Display for Position {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "({},{})", self.x, self.y)
+impl<'lib> TileState<'lib> {
+    pub fn pixel(&self) -> common::Pixel {
+        match self {
+            TileState::Collapsed(tile) => tile.building.display_char(tile.offset),
+            TileState::Supperposed(_) => {
+                common::Pixel::new('?', common::Color::Red, common::Color::Reset)
+            }
+        }
+    }
+
+    pub fn collapsed(&self) -> bool {
+        match self {
+            TileState::Collapsed(_) => true,
+            TileState::Supperposed(_) => false,
+        }
+    }
+
+    pub fn entropy(&self) -> f32 {
+        match self {
+            TileState::Collapsed(_) => 0.0,
+            TileState::Supperposed(quantic) => quantic.entropy(),
+        }
+    }
+
+    pub fn collapse(&mut self) -> Result<(), crate::quantic::Error> {
+        match self {
+            TileState::Collapsed(_) => Err(crate::quantic::Error::AlreadyCollapsed),
+            TileState::Supperposed(quantic) => {
+                *self = TileState::Collapsed(quantic.collapse()?);
+                Ok(())
+            }
+        }
+    }
+
+    pub fn constrain_to_complete_building(
+        &mut self,
+        offset: common::Position,
+        building: &crate::library::Building,
+    ) -> Result<(), crate::quantic::Error> {
+        match self {
+            TileState::Collapsed(_) => Ok(()), // Mmh ?
+            TileState::Supperposed(quantic) => {
+                quantic.constrain_to_complete_building(offset, building)
+            }
+        }
     }
 }
 
-enum GridCell<T: GridElement> {
-    Empty,
-    Cell(T),
-    RefCell(Position),
-}
-
-pub struct Grid<T: GridElement> {
+pub struct Grid<'lib> {
     width: usize,
     height: usize,
-    cells: Vec<GridCell<T>>,
+    cells: Vec<TileState<'lib>>,
 }
 
-impl<T: GridElement> Grid<T> {
-    pub fn new(width: usize, height: usize) -> Self {
-        let mut cells = Vec::with_capacity(width * height);
-        for _ in 0..width * height {
-            cells.push(GridCell::Empty);
-        }
-        Grid {
-            width,
-            height,
-            cells,
-        }
-    }
-
-    pub fn from_fn<F: Fn(usize, usize) -> T>(width: usize, height: usize, f: F) -> Self {
+impl<'lib> Grid<'lib> {
+    pub fn from_fn<F: Fn(crate::common::Position) -> TileState<'lib>>(
+        width: usize,
+        height: usize,
+        f: F,
+    ) -> Self {
         let mut cells = Vec::with_capacity(width * height);
         for y in 0..height {
             for x in 0..width {
-                cells.push(GridCell::Cell(f(x, y)));
+                cells.push(f(common::Position::new(x, y)));
             }
         }
         Grid {
@@ -64,98 +110,123 @@ impl<T: GridElement> Grid<T> {
         }
     }
 
-    pub fn width(&self) -> usize {
-        self.width
-    }
+    pub fn collapse_once(&mut self) -> Result<bool, quantic::Error> {
+        let min_entropy_index = self
+            .cells
+            .iter()
+            .enumerate()
+            .filter(|(_, cell)| !cell.collapsed())
+            .min_by(|(_, c1), (_, c2)| c1.entropy().total_cmp(&c2.entropy()));
 
-    pub fn height(&self) -> usize {
-        self.height
+        let (collapse_index, _) = match min_entropy_index {
+            Some(cell) => cell,
+            None => return Ok(false),
+        };
+
+        let (first, rest) = self.cells.split_at_mut(collapse_index);
+        let (to_collapse, end) = rest.split_at_mut(1);
+
+        to_collapse[0].collapse()?;
+        let (collapsed_building, collapsed_offset) = match &to_collapse[0] {
+            TileState::Collapsed(building) => (building.building(), building.offset()),
+            _ => unreachable!(),
+        };
+
+        let collapsed_building_origin = common::Position::new(
+            collapse_index % self.width - collapsed_offset.x,
+            collapse_index / self.width - collapsed_offset.y,
+        );
+        let size = collapsed_building.size();
+
+        let other_cell_iter = first
+            .iter_mut()
+            .enumerate()
+            .chain(end.iter_mut().enumerate().map(|(i, c)| (i + 1, c)))
+            .map(|(index, cell)| {
+                (
+                    common::Position::new(index % self.width, index / self.width),
+                    cell,
+                )
+            });
+
+        for (other_position, other_cell) in other_cell_iter {
+            let offset = collapsed_building_origin + other_position;
+            if other_position == collapsed_offset {
+                continue;
+            }
+            match other_cell.constrain_to_complete_building(other_position, collapsed_building) {
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
+
+        Ok(true)
     }
 
     pub fn display(&self) {
-        let mut result = String::with_capacity(self.width * self.height);
+        use crate::common::Color;
+        use std::fmt::Write;
+
+        let mut result = String::new();
+        let mut foreground = Color::White;
+        let mut background = Color::Black;
+
+        write!(
+            result,
+            "{}",
+            crossterm::style::SetBackgroundColor(background)
+        )
+        .unwrap();
+        write!(
+            result,
+            "{}",
+            crossterm::style::SetForegroundColor(foreground)
+        )
+        .unwrap();
+
         for y in 0..self.height {
             for x in 0..self.width {
-                let pos = Position::new(x, y);
-                match self.get(pos) {
-                    Some(data) => result.push(data.display_char()),
-                    None => result.push(' '),
+                let index = y * self.width + x;
+                let pixel = match self.cells.get(index) {
+                    Some(data) => data.pixel(),
+                    None => unreachable!(),
+                };
+                if pixel.foreground() != foreground {
+                    foreground = pixel.foreground();
+                    write!(
+                        result,
+                        "{}",
+                        crossterm::style::SetForegroundColor(foreground)
+                    )
+                    .unwrap();
                 }
+                if pixel.background() != background {
+                    background = pixel.background();
+                    write!(
+                        result,
+                        "{}",
+                        crossterm::style::SetBackgroundColor(background)
+                    )
+                    .unwrap();
+                }
+                result.push(pixel.value());
             }
             result.push('\n');
         }
+
+        write!(
+            result,
+            "{}",
+            crossterm::style::SetBackgroundColor(Color::Reset)
+        )
+        .unwrap();
+        write!(
+            result,
+            "{}",
+            crossterm::style::SetForegroundColor(Color::Reset)
+        )
+        .unwrap();
+
         println!("{result}");
-    }
-
-    pub fn insert(&mut self, top_left: Position, data: T) -> Result<(), GridError> {
-        if top_left.x + data.size().width.get() > self.width {
-            return Err(GridError::OutOfBound);
-        }
-        if top_left.y + data.size().height.get() > self.height {
-            return Err(GridError::OutOfBound);
-        }
-
-        for i in top_left.x..top_left.x + data.size().width.get() {
-            for j in top_left.y..top_left.y + data.size().height.get() {
-                match &self.cells[j * self.width + i] {
-                    GridCell::Empty => {}
-                    _ => return Err(GridError::InsertionWouldOverlap),
-                }
-            }
-        }
-
-        for i in top_left.x..top_left.x + data.size().width.get() {
-            for j in top_left.y..top_left.y + data.size().height.get() {
-                self.cells[j * self.width + i] = GridCell::RefCell(top_left);
-            }
-        }
-
-        self.cells[top_left.y * self.width + top_left.x] = GridCell::Cell(data);
-
-        Ok(())
-    }
-
-    pub fn get(&self, pos: Position) -> Option<&T> {
-        match self.cells.get(pos.y * self.width + pos.x)? {
-            GridCell::Empty => None,
-            GridCell::Cell(data) => Some(data),
-            GridCell::RefCell(ref_index) => {
-                match self.cells.get(ref_index.y * self.width + pos.y) {
-                    Some(GridCell::Cell(data)) => Some(data),
-                    _ => panic!(
-                        "Invalid grid layout: ref cell at {pos} points to invalid cell at {ref_index}"
-                    ),
-                }
-            }
-        }
-    }
-
-    pub fn cells(&self) -> impl Iterator<Item = &T> {
-        self.cells
-            .iter()
-            .filter(|cell| match cell {
-                GridCell::Cell(_) => true,
-                _ => false,
-            })
-            .map(|cell| match cell {
-                GridCell::Cell(cell) => cell,
-                _ => unreachable!(),
-            })
-    }
-
-    pub fn cells_mut(&mut self) -> impl Iterator<Item = (Position, &mut T)> {
-        self.cells
-            .iter_mut()
-            .enumerate()
-            .filter(|(_, cell)| match cell {
-                GridCell::Cell(_) => true,
-                _ => false,
-            })
-            .map(|(index, cell)| match cell {
-                GridCell::Cell(cell) => {
-                    (Position::new(index % self.width, index / self.width), cell)
-                }
-                _ => unreachable!(),
-            })
     }
 }
